@@ -815,11 +815,32 @@ if ($clientPath) {
         }
         Write-LdLog 'Restoring missing runtime files from the verified archive ...' STEP
         & $sevenZip x $archive ("-o" + $wsaDir) -y -aoa | Out-Null
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $requiredDll)) {
-            Write-LdLog 'The DLL could not be restored. Check Windows Security > Virus & threat protection > Protection history for a quarantine entry, then run START HERE.bat again.' ERR
+        if ($LASTEXITCODE -ne 0) {
+            Write-LdLog '7-Zip could not restore the saved image. The downloaded archive is unchanged.' ERR
             exit 4
         }
-        Write-LdLog 'Missing DLL restored from the saved Android image.' OK
+        if (-not (Test-Path -LiteralPath $requiredDll)) {
+            # Some WSABuilds layouts put this native library in the package
+            # root instead of WsaClient\. The Windows loader searches the EXE
+            # directory first, not the parent; copy the official file from the
+            # same verified image into that directory.
+            $copies = @(Get-ChildItem -LiteralPath $wsaDir -Filter 'gfxstream_backend.dll' -Recurse -File -ErrorAction SilentlyContinue)
+            if ($copies.Count -gt 0) {
+                $source = $copies | Sort-Object { $_.FullName.Length } | Select-Object -First 1
+                Write-LdLog ('Found image DLL at: ' + $source.FullName) INFO
+                try {
+                    Copy-Item -LiteralPath $source.FullName -Destination $requiredDll -ErrorAction Stop
+                } catch {
+                    Write-LdLog ('Could not place DLL beside WsaClient.exe: ' + $_.Exception.Message) ERR
+                    exit 4
+                }
+            }
+        }
+        if (-not (Test-Path -LiteralPath $requiredDll)) {
+            Write-LdLog 'DLL was listed in the archive but is absent after extraction. Check Windows Security > Virus & threat protection > Protection history for a quarantine entry; do not download a random DLL.' ERR
+            exit 4
+        }
+        Write-LdLog 'Required image DLL is now beside WsaClient.exe.' OK
     }
 }
 
