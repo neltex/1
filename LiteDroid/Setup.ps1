@@ -618,7 +618,12 @@ Write-LdLog ("Image: {0} ({1} MB, {2})" -f $asset.Name, $asset.SizeMb, $asset.Re
 $existing = Get-LdWsaPackage
 if ($existing -and -not $Replace) {
     $installedProfile = [string]$cfg['InstalledProfile']
-    if ($installedProfile -eq $Profile) {
+    if (-not $installedProfile -and $Profile -eq 'ultralight') {
+        # Registration succeeded on an earlier run, but first boot failed
+        # before InstalledProfile was saved. This is a repair, not a profile
+        # switch: preserve the installed runtime and the 530 MB archive.
+        Write-LdLog 'Existing runtime has no recorded profile (previous setup stopped early). Continuing repair without downloading again.' WARN
+    } elseif ($installedProfile -eq $Profile) {
         Write-LdLog 'The runtime is already installed with this profile - skipping the download.' OK
     } else {
         Write-LdLog ("A runtime is already installed (profile '{0}'). Re-run with -Replace to switch to '{1}'." -f $installedProfile, $Profile) WARN
