@@ -354,8 +354,14 @@ function Get-LdPreflight {
     if ($r.Arch -ne 'AMD64' -and $r.Arch -ne 'ARM64') {
         $r.Blockers += "Unsupported CPU architecture: $($r.Arch). x64 or ARM64 is required."
     }
-    if ($r.IsWin11 -eq $false -and $r.Build -lt 19045) {
-        $r.Blockers += "Windows build $($r.Build) is too old. Windows 10 22H2 (19045+ or 19041.264+) or Windows 11 is required."
+    # Windows 10 build map: 19041 = 2004/20H2, 19043 = 21H1, 19044 = 21H2,
+    # 19045 = 22H2. The patched Windows 10 image supports 19041.264 and newer,
+    # so only pre-20H1 builds are a real blocker; 21H2 is a supported-but-older
+    # path that wants two cumulative updates first.
+    if ($r.IsWin11 -eq $false -and $r.Build -lt 19041) {
+        $r.Blockers += ("Windows build {0} is too old (2004/19041 is the minimum). Run Windows Update, or install the 22H2 enablement package (KB5015684)." -f $r.Build)
+    } elseif ($r.IsWin11 -eq $false -and $r.Build -lt 19045) {
+        $r.Warnings += ("Windows 10 build {0} is older than 22H2 (19045). LiteDroid's patched Windows 10 image supports 19041+, so this usually works, but install KB5014032 then KB5022834 (or simply let Windows Update finish) for the best chance." -f $r.Build)
     }
     if ($r.VirtFirmware -eq $false -and $r.HypervisorOn -eq $false) {
         $r.Blockers += 'CPU virtualization is disabled in BIOS/UEFI. Enable VT-x (Intel) or SVM/AMD-V (AMD), then reboot.'

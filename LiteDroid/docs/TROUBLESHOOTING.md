@@ -22,9 +22,22 @@ Technology* or *AMD-V / SVM*. On many laptops it is hidden until you disable
 "Hyper-V" or enable "Virtual Machine Mode" there. `-Diag` shows
 `firmware=False hypervisor=False` in that state.
 
-**"Windows build is too old"**
-Windows 10 needs 22H2 (19045.2311+). Older 19041/19042 builds need KB5014032 and
-KB5022834 first. Windows 11 needs 22000.526+.
+**"Windows build is too old"** — only builds below 19041 (Windows 10 2004) are
+actually blocked. Windows 11 needs 22000.526+.
+
+**You are on Windows 10 21H2 (build 19044) or 21H1/20H2**
+This is *not* a blocker — LiteDroid warns and continues, because the patched
+Windows 10 image supports 19041+. Two things make it much more reliable:
+
+1. **Best:** move to 22H2. It is a ~1 MB "enablement package" (KB5015684) that
+   flips one registry flag and reboots — no reinstall, no data touched:
+   *Settings → Update & Security → Windows Update → Check for updates*, or grab
+   KB5015684 x64 from the Microsoft Update Catalog.
+2. **Or** install **KB5014032** then **KB5022834** and reboot. Setup prints
+   *"Missing update(s): …"* when they are absent.
+
+On 21H2 you are also past Windows 10's end of support, so this is worth doing
+anyway. After either step, run `START HERE.bat` again.
 
 **"Less than 8 GB free"** — the runtime plus one app needs roughly 4–5 GB; setup
 wants 8 GB so it does not fill your disk mid-extract.

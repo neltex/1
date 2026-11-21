@@ -54,6 +54,22 @@ Write-LdLog ("{0} build {1} | {2} | {3} logical cores | {4} GB RAM | {5} GB free
 
 foreach ($w in $pf.Warnings) { Write-LdLog $w WARN }
 
+# On pre-22H2 Windows 10 the runtime expects two cumulative updates. Report
+# which ones are missing instead of failing later with an appx error.
+if (-not $pf.IsWin11 -and $pf.Build -lt 19045) {
+    $missing = @()
+    foreach ($kb in @('KB5014032', 'KB5022834')) {
+        $found = $null
+        try { $found = Get-HotFix -Id $kb -ErrorAction Stop } catch { $found = $null }
+        if (-not $found) { $missing += $kb }
+    }
+    if ($missing.Count -gt 0) {
+        Write-LdLog ("Missing update(s): {0} - Windows Update will install them; the runtime may not start without them." -f ($missing -join ', ')) WARN
+    } else {
+        Write-LdLog 'Both compatibility updates are present.' OK
+    }
+}
+
 if ($pf.Blockers.Count -gt 0) {
     foreach ($b in $pf.Blockers) { Write-LdLog $b ERR }
     Write-LdLog 'Setup cannot continue on this machine.' ERR

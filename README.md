@@ -91,7 +91,7 @@ program: double-click, pin to taskbar, add to Start.
 
 | | |
 |---|---|
-| Windows | 11 (any build 22000+) — or Windows 10 22H2 build 19045.2311+ (19041.264+ works with the patched image) |
+| Windows | 11 (any build 22000+) — or Windows 10 build **19041+**; 22H2 (19045) recommended, 21H2 (19044) works via the patched image once KB5014032 + KB5022834 are installed |
 | CPU | x86-64 or ARM64 with virtualization enabled in BIOS/UEFI (VT-x / AMD-V) |
 | RAM | 8 GB recommended (it will run on 6 GB: the VM gets 2 GB) |
 | Disk | ~8 GB free on `C:` (NTFS), plus room for your apps |
