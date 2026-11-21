@@ -23,6 +23,17 @@ try {
     }
 } catch { Write-Host ("Could not inspect PowerShell processes: " + $_.Exception.Message) }
 
+# A paused old setup .bat can also keep the ZIP folder as its working
+# directory even after PowerShell has closed. This cleanup .bat runs from
+# %TEMP%, so its own cmd.exe is deliberately excluded by command-line name.
+try {
+    foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name = 'cmd.exe'" -ErrorAction Stop |
+        Where-Object { $_.CommandLine -match '(?i)(?:START HERE|Install LiteDroid)\.bat' })) {
+        try { Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop }
+        catch { Write-Host ('Could not close old setup window: ' + $_.Exception.Message) }
+    }
+} catch { }
+
 foreach ($name in @('WsaClient','WsaSettings','WsaService','WsaHost','vmmemWSA')) {
     foreach ($proc in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
         try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop }
