@@ -794,55 +794,56 @@ if (-not $pkg) {
 $script:LD.WsaPfn = [string]$pkg.PackageFamilyName
 Write-LdLog ("Runtime installed: " + $pkg.Version) OK
 
-# Before booting, verify the DLLs that WsaClient.exe loads at process start.
-# A valid 7z archive does not prove every extracted file survived antivirus.
+# WSABuilds keeps shared native DLLs in the package root, whereas the Windows
+# loader looks next to WsaClient.exe. Stage all package-root DLLs beside the
+# client at once; copying only gfxstream_backend.dll caused WSACodecs.dll to be
+# the next missing import. Never use DLLs from third-party download sites.
 $clientPath = Get-LdWsaClientPath
-if ($clientPath) {
-    $clientDir = Split-Path -Parent $clientPath
-    $requiredDll = Join-Path $clientDir 'gfxstream_backend.dll'
-    if (-not (Test-Path -LiteralPath $requiredDll)) {
-        Write-LdLog 'gfxstream_backend.dll is missing beside WsaClient.exe; checking the saved image ...' WARN
-        $archive = Join-Path $script:LD.Root ('downloads\' + $asset.Name)
-        if (-not (Test-Path -LiteralPath $archive)) {
-            Write-LdLog 'Saved Android archive not found. Run START HERE.bat again after restoring the archive; do not download random DLLs.' ERR
-            exit 4
-        }
-        $listing = & $sevenZip l -slt $archive 2>&1
-        $archiveEntry = @($listing | Where-Object { $_ -match '^Path = .*gfxstream_backend\.dll$' } | Select-Object -First 1)
-        if ($archiveEntry.Count -eq 0) {
-            Write-LdLog 'The saved Android image itself has no gfxstream_backend.dll. This image cannot start on this PC; do not fetch a DLL from third-party sites.' ERR
-            exit 4
-        }
-        Write-LdLog 'Restoring missing runtime files from the verified archive ...' STEP
-        & $sevenZip x $archive ("-o" + $wsaDir) -y -aoa | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            Write-LdLog '7-Zip could not restore the saved image. The downloaded archive is unchanged.' ERR
-            exit 4
-        }
-        if (-not (Test-Path -LiteralPath $requiredDll)) {
-            # Some WSABuilds layouts put this native library in the package
-            # root instead of WsaClient\. The Windows loader searches the EXE
-            # directory first, not the parent; copy the official file from the
-            # same verified image into that directory.
-            $copies = @(Get-ChildItem -LiteralPath $wsaDir -Filter 'gfxstream_backend.dll' -Recurse -File -ErrorAction SilentlyContinue)
-            if ($copies.Count -gt 0) {
-                $source = $copies | Sort-Object { $_.FullName.Length } | Select-Object -First 1
-                Write-LdLog ('Found image DLL at: ' + $source.FullName) INFO
-                try {
-                    Copy-Item -LiteralPath $source.FullName -Destination $requiredDll -ErrorAction Stop
-                } catch {
-                    Write-LdLog ('Could not place DLL beside WsaClient.exe: ' + $_.Exception.Message) ERR
-                    exit 4
-                }
-            }
-        }
-        if (-not (Test-Path -LiteralPath $requiredDll)) {
-            Write-LdLog 'DLL was listed in the archive but is absent after extraction. Check Windows Security > Virus & threat protection > Protection history for a quarantine entry; do not download a random DLL.' ERR
-            exit 4
-        }
-        Write-LdLog 'Required image DLL is now beside WsaClient.exe.' OK
+if (-not $clientPath) {
+    Write-LdLog 'WsaClient.exe is missing from the registered runtime. Re-run setup with -Replace.' ERR
+    exit 4
+}
+$clientDir = Split-Path -Parent $clientPath
+$packageRoot = [string]$pkg.InstallLocation
+$needed = @('gfxstream_backend.dll', 'WSACodecs.dll')
+$missingInRoot = @($needed | Where-Object {
+    -not (Test-Path -LiteralPath (Join-Path $clientDir $_)) -and
+    -not (Test-Path -LiteralPath (Join-Path $packageRoot $_))
+})
+if ($missingInRoot.Count -gt 0) {
+    $archive = Join-Path $script:LD.Root ('downloads\' + $asset.Name)
+    if (-not (Test-Path -LiteralPath $archive)) {
+        Write-LdLog 'Required DLL missing and saved Android archive not found. Keep your downloads folder and run START HERE.bat again.' ERR
+        exit 4
+    }
+    Write-LdLog ('Restoring missing image DLL(s) from the saved archive: ' + ($missingInRoot -join ', ')) STEP
+    & $sevenZip x $archive ("-o" + $wsaDir) -y -aoa | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-LdLog '7-Zip could not restore the saved Android image.' ERR
+        exit 4
     }
 }
+$rootDlls = @(Get-ChildItem -LiteralPath $packageRoot -Filter '*.dll' -File -ErrorAction SilentlyContinue)
+$copied = 0
+foreach ($dll in $rootDlls) {
+    $target = Join-Path $clientDir $dll.Name
+    if (Test-Path -LiteralPath $target) { continue }
+    try {
+        Copy-Item -LiteralPath $dll.FullName -Destination $target -ErrorAction Stop
+        $copied = $copied + 1
+    } catch {
+        Write-LdLog ('Could not stage ' + $dll.Name + ': ' + $_.Exception.Message) ERR
+        exit 4
+    }
+}
+if ($copied -gt 0) { Write-LdLog ("Staged {0} official shared DLL(s) beside WsaClient.exe." -f $copied) OK }
+foreach ($name in $needed) {
+    if (-not (Test-Path -LiteralPath (Join-Path $clientDir $name))) {
+        Write-LdLog ("{0} is absent even after restoring the saved image. Check Windows Security > Protection history; do not download loose DLLs." -f $name) ERR
+        exit 4
+    }
+}
+Write-LdLog 'Required WsaClient DLLs are present.' OK
 
 # --------------------------------------------------------- 6. resource budget
 $mem = $MemoryMB

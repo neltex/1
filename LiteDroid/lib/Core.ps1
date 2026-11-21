@@ -575,10 +575,11 @@ function Start-LdWsa {
         Write-LdLog 'Android runtime is not installed yet.' ERR
         return $false
     }
-    $gfx = Join-Path (Split-Path -Parent $client) 'gfxstream_backend.dll'
-    if (-not (Test-Path -LiteralPath $gfx)) {
-        Write-LdLog 'Android cannot start: gfxstream_backend.dll is missing beside WsaClient.exe. Run START HERE.bat from the updated ZIP to repair it.' ERR
-        return $false
+    foreach ($name in @('gfxstream_backend.dll', 'WSACodecs.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $client) $name))) {
+            Write-LdLog ("Android cannot start: {0} is missing beside WsaClient.exe. Run START HERE.bat from the updated ZIP to repair it." -f $name) ERR
+            return $false
+        }
     }
     Write-LdLog 'Starting Android runtime ...' STEP
     try {

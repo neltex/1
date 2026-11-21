@@ -14,7 +14,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Get-AppxPackage 
 if errorlevel 1 goto install
 
 rem ---- installed but damaged: repair instead of opening a broken window ----
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForAndroid -ErrorAction SilentlyContinue; if (-not $p -or -not (Test-Path -LiteralPath (Join-Path $p.InstallLocation 'WsaClient\gfxstream_backend.dll'))) { exit 1 }"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForAndroid -ErrorAction SilentlyContinue; if (-not $p -or -not (Test-Path -LiteralPath (Join-Path $p.InstallLocation 'WsaClient\gfxstream_backend.dll')) -or -not (Test-Path -LiteralPath (Join-Path $p.InstallLocation 'WsaClient\WSACodecs.dll'))) { exit 1 }"
 if errorlevel 1 goto install
 
 rem ---- already installed: just open the window ---------------------------
