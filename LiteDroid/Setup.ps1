@@ -789,6 +789,35 @@ if (-not $pkg) {
 $script:LD.WsaPfn = [string]$pkg.PackageFamilyName
 Write-LdLog ("Runtime installed: " + $pkg.Version) OK
 
+# Before booting, verify the DLLs that WsaClient.exe loads at process start.
+# A valid 7z archive does not prove every extracted file survived antivirus.
+$clientPath = Get-LdWsaClientPath
+if ($clientPath) {
+    $clientDir = Split-Path -Parent $clientPath
+    $requiredDll = Join-Path $clientDir 'gfxstream_backend.dll'
+    if (-not (Test-Path -LiteralPath $requiredDll)) {
+        Write-LdLog 'gfxstream_backend.dll is missing beside WsaClient.exe; checking the saved image ...' WARN
+        $archive = Join-Path $script:LD.Root ('downloads\' + $asset.Name)
+        if (-not (Test-Path -LiteralPath $archive)) {
+            Write-LdLog 'Saved Android archive not found. Run START HERE.bat again after restoring the archive; do not download random DLLs.' ERR
+            exit 4
+        }
+        $listing = & $sevenZip l -slt $archive 2>&1
+        $archiveEntry = @($listing | Where-Object { $_ -match '^Path = .*gfxstream_backend\.dll$' } | Select-Object -First 1)
+        if ($archiveEntry.Count -eq 0) {
+            Write-LdLog 'The saved Android image itself has no gfxstream_backend.dll. This image cannot start on this PC; do not fetch a DLL from third-party sites.' ERR
+            exit 4
+        }
+        Write-LdLog 'Restoring missing runtime files from the verified archive ...' STEP
+        & $sevenZip x $archive ("-o" + $wsaDir) -y -aoa | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $requiredDll)) {
+            Write-LdLog 'The DLL could not be restored. Check Windows Security > Virus & threat protection > Protection history for a quarantine entry, then run START HERE.bat again.' ERR
+            exit 4
+        }
+        Write-LdLog 'Missing DLL restored from the saved Android image.' OK
+    }
+}
+
 # --------------------------------------------------------- 6. resource budget
 $mem = $MemoryMB
 $cores = $Cores
