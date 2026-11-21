@@ -63,8 +63,14 @@ if (-not $pf.IsWin11 -and $pf.Build -lt 19045) {
         try { $found = Get-HotFix -Id $kb -ErrorAction Stop } catch { $found = $null }
         if (-not $found) { $missing += $kb }
     }
+    $ubr = 0
+    try { $ubr = [int](Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name UBR -ErrorAction Stop).UBR } catch { }
+    Write-LdLog ("Windows full OS build: {0}.{1}" -f $pf.Build, $ubr) INFO
     if ($missing.Count -gt 0) {
-        Write-LdLog ("Missing update(s): {0} - Windows Update will install them; the runtime may not start without them." -f ($missing -join ', ')) WARN
+        Write-LdLog ("KB(s) not individually listed by Get-HotFix: {0}. They may be superseded by a newer cumulative update; this is not proof they are missing." -f ($missing -join ', ')) WARN
+        if ($ubr -gt 0 -and $ubr -lt 2311) {
+            Write-LdLog 'This OS revision predates WSABuilds recommended Windows 10 19045.2311. A current Windows cumulative update is needed for reliable WSA startup; changing the APK cannot supply missing OS APIs.' WARN
+        }
     } else {
         Write-LdLog 'Both compatibility updates are present.' OK
     }
@@ -657,7 +663,7 @@ if ($Replace -and $existing) {
     $existing = $null
 }
 
-$wsaDir = Join-Path $script:LD.Root 'wsa'
+$wsaDir = Join-Path $script:LD.Root 'WSA'  # short path: upstream warns long WSA folder names can prevent startup
 if (-not (Get-LdWsaPackage) -or $Replace) {
     $archive = Join-Path $script:LD.Root ('downloads\' + $asset.Name)
     $expected = [int64]-1
@@ -712,6 +718,21 @@ if (-not (Get-LdWsaPackage) -or $Replace) {
     if ($LASTEXITCODE -ne 0) {
         Write-LdLog "Extraction failed (7-Zip exit $LASTEXITCODE)." ERR
         Write-LdLog 'Free some disk space (about 4 GB is needed while extracting), then run Setup again.' WARN
+        exit 4
+    }
+    # Release archives contain an extra WSA_2407... directory. Flatten it so
+    # AppxManifest.xml itself is at C:\LiteDroid\WSA (short path).
+    $inner = Get-ChildItem -LiteralPath $wsaDir -Filter 'AppxManifest.xml' -Recurse -File -ErrorAction SilentlyContinue |
+        Sort-Object { $_.FullName.Length } | Select-Object -First 1
+    if ($inner -and (Split-Path -Parent $inner.FullName) -ne $wsaDir) {
+        $innerDir = Split-Path -Parent $inner.FullName
+        foreach ($item in @(Get-ChildItem -LiteralPath $innerDir -Force)) {
+            Move-Item -LiteralPath $item.FullName -Destination $wsaDir -Force -ErrorAction Stop
+        }
+        Remove-Item -LiteralPath $innerDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $wsaDir 'AppxManifest.xml'))) {
+        Write-LdLog 'Extracted image has no AppxManifest.xml at the short path.' ERR
         exit 4
     }
     Write-LdLog 'Extracted.' OK
@@ -806,6 +827,33 @@ if (-not $pkg) {
 }
 $script:LD.WsaPfn = [string]$pkg.PackageFamilyName
 Write-LdLog ("Runtime installed: " + $pkg.Version) OK
+
+# WSABuilds warns that its auto-generated long folder name can keep WSA
+# from starting. Older LiteDroid versions extracted to wsa\WSA_2407..._x64.
+# Copy to a short stable path and re-register IN PLACE: never remove the
+# existing package (which could delete app data), and retain the old folder.
+$oldInstallPath = [string]$pkg.InstallLocation
+if ($oldInstallPath -ne $wsaDir -and $oldInstallPath -like ((Join-Path $script:LD.Root 'wsa') + '*')) {
+    Write-LdLog 'Migrating registered runtime to short C:\LiteDroid\WSA path (upstream startup compatibility fix) ...' STEP
+    try {
+        if (-not (Test-Path -LiteralPath (Join-Path $wsaDir 'AppxManifest.xml'))) {
+            if (-not (Test-Path -LiteralPath $wsaDir)) { New-Item -ItemType Directory -Path $wsaDir -Force | Out-Null }
+            Copy-Item -Path (Join-Path $oldInstallPath '*') -Destination $wsaDir -Recurse -Force -ErrorAction Stop
+        }
+        $shortManifest = Join-Path $wsaDir 'AppxManifest.xml'
+        if (-not (Test-Path -LiteralPath $shortManifest)) { throw 'AppxManifest.xml not found in copied runtime.' }
+        Add-AppxPackage -Register $shortManifest -ForceApplicationShutdown -ForceUpdateFromAnyVersion -ErrorAction Stop
+        $pkg = Get-LdWsaPackage
+        if (-not $pkg -or [string]$pkg.InstallLocation -ne $wsaDir) {
+            throw 'Windows did not register the short-path copy; original runtime was not deleted.'
+        }
+        Write-LdLog ('Runtime registered at short path: ' + $pkg.InstallLocation) OK
+    } catch {
+        Write-LdLog ('Short-path repair failed: ' + $_.Exception.Message) ERR
+        Write-LdLog 'Original runtime and downloaded image have not been deleted.' WARN
+        exit 4
+    }
+}
 
 # WSABuilds keeps shared native DLLs in the package root, whereas the Windows
 # loader looks next to WsaClient.exe. Stage all package-root DLLs beside the
