@@ -483,10 +483,33 @@ function Test-LdAdbDevice {
     return $false
 }
 
+function Test-LdWsaPortExcluded {
+    # Windows/Hyper-V may reserve a range containing WSA's fixed adb port.
+    # Never remove reservations automatically: doing so could break other VMs.
+    try {
+        $ranges = & netsh.exe int ipv4 show excludedportrange protocol=tcp 2>$null
+        foreach ($line in $ranges) {
+            if ($line -match '^\s*(\d+)\s+(\d+)\s*(?:\*.*)?$') {
+                if ($script:LD.WsaPort -ge [int]$Matches[1] -and $script:LD.WsaPort -le [int]$Matches[2]) {
+                    return $true
+                }
+            }
+        }
+    } catch { }
+    return $false
+}
+
 function Connect-LdAdb {
     param([int]$TimeoutSec = 90)
 
     $target = '127.0.0.1:' + $script:LD.WsaPort
+    if (-not (Get-LdAdbExe)) {
+        Write-LdLog 'adb.exe is missing. Run START HERE.bat to restore Android platform-tools; waiting will not help.' ERR
+        return $false
+    }
+    if (Test-LdWsaPortExcluded) {
+        Write-LdLog 'Windows reserves TCP port 58526 for another service/Hyper-V range; WSA may be unable to open adb. Do not remove Windows port reservations blindly.' WARN
+    }
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     Write-LdLog "Waiting for the Android runtime to accept adb on $target ..." STEP
 
@@ -498,7 +521,7 @@ function Connect-LdAdb {
             return $true
         }
     }
-    Write-LdLog 'adb did not connect. This can mean the Android VM never started; it does not imply Developer Mode is off.' WARN
+    Write-LdLog 'adb did not connect. This does not mean the APK is bad. Check whether Android itself opened and whether the port-reservation warning appeared above.' WARN
     return $false
 }
 
