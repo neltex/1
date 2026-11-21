@@ -19,6 +19,7 @@ $script:LD = @{
     Root      = 'C:\LiteDroid'
     AdbPort   = 5038
     WsaPort   = 58526
+    WsaDevice = '127.0.0.1:58526'
     WsaPfn    = 'MicrosoftCorporationII.WindowsSubsystemForAndroid_8wekyb3d8bbwe'
     WsaName   = 'MicrosoftCorporationII.WindowsSubsystemForAndroid'
     LogFile   = $null
@@ -476,9 +477,11 @@ function Invoke-LdAdb {
 function Test-LdAdbDevice {
     $res = Invoke-LdAdb -Arguments @('devices') -AllowFail -Quiet
     if (-not $res) { return $false }
-    $target = '127.0.0.1:' + $script:LD.WsaPort
     foreach ($l in ($res.Text -split "`n")) {
-        if ($l -match [regex]::Escape($target) -and $l -match '\sdevice\s*$') { return $true }
+        if ($l -match '^\s*((?:127\.0\.0\.1|localhost):58526)\s+device\s*$') {
+            $script:LD.WsaDevice = $Matches[1]
+            return $true
+        }
     }
     return $false
 }
@@ -513,15 +516,33 @@ function Connect-LdAdb {
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     Write-LdLog "Waiting for the Android runtime to accept adb on $target ..." STEP
 
+    $lastReply = ''
+    $tries = 0
     while ((Get-Date) -lt $deadline) {
-        Invoke-LdAdb -Arguments @('connect', $target) -AllowFail -Quiet | Out-Null
-        Start-Sleep -Milliseconds 1500
+        $tries = $tries + 1
+        $reply = Invoke-LdAdb -Arguments @('connect', $target) -AllowFail -Quiet -TimeoutSec 10
+        if ($reply -and $reply.Text) { $lastReply = $reply.Text }
         if (Test-LdAdbDevice) {
-            Write-LdLog 'adb connected.' OK
+            Write-LdLog ('adb connected to ' + $script:LD.WsaDevice) OK
             return $true
         }
+        # localhost may resolve differently from the numeric loopback address
+        # on some Windows/WSA combinations; accept either serial in `devices`.
+        if ($tries -eq 4) {
+            $alt = Invoke-LdAdb -Arguments @('connect', ('localhost:' + $script:LD.WsaPort)) -AllowFail -Quiet -TimeoutSec 10
+            if ($alt -and $alt.Text) { $lastReply = $alt.Text }
+            if (Test-LdAdbDevice) {
+                Write-LdLog ('adb connected to ' + $script:LD.WsaDevice) OK
+                return $true
+            }
+        }
+        Start-Sleep -Milliseconds 1500
     }
-    Write-LdLog 'adb did not connect. This does not mean the APK is bad. Check whether Android itself opened and whether the port-reservation warning appeared above.' WARN
+    $devices = Invoke-LdAdb -Arguments @('devices') -AllowFail -Quiet -TimeoutSec 10
+    Write-LdLog ('adb connect result: ' + $(if ($lastReply) { $lastReply } else { 'no response' })) WARN
+    Write-LdLog ('adb device list: ' + $(if ($devices) { $devices.Text } else { 'no response' })) WARN
+    Write-LdLog ('Windows runtime: VM running={0}, WsaService={1}, WsaClient running={2}' -f [bool](Get-LdVmProcess), $(if (Get-Service -Name WsaService -ErrorAction SilentlyContinue) { (Get-Service -Name WsaService).Status } else { 'not found' }), [bool](Get-Process -Name WsaClient -ErrorAction SilentlyContinue)) WARN
+    Write-LdLog 'Android has not accepted adb. This is a runtime connection failure, not an APK installation failure.' WARN
     return $false
 }
 
@@ -820,7 +841,7 @@ function Install-LdApk {
         $sizeMb = [math]::Round((Get-Item -LiteralPath $apk).Length / 1MB, 1)
         Write-LdLog ("Installing {0} ({1} MB) ..." -f (Split-Path -Leaf $apk), $sizeMb) STEP
 
-        $adbArgs = @('-s', ('127.0.0.1:' + $script:LD.WsaPort), 'install', '-r')
+        $adbArgs = @('-s', $script:LD.WsaDevice, 'install', '-r')
         if ($cfg['GrantPermissions']) { $adbArgs += '-g' }
         $adbArgs += $apk
 
