@@ -49,6 +49,34 @@ from a freshly extracted image.
 
 ---
 
+## The image download keeps breaking or is very slow
+
+Symptom: `curl: (18) transfer closed with … bytes remaining`, or a progress bar
+crawling at a few hundred KB/s for half an hour.
+
+- **Every download resumes.** Never delete `C:\LiteDroid\downloads\*.7z` — re-running
+  Setup continues from the bytes already there. Setup verifies the file against the
+  exact size published by the release before extracting, so a truncated file is never
+  mistaken for a finished one.
+- 530 MB at ~250 KB/s is ~35 minutes. That is the network, not the tool; the download
+  runs in the background of one console window and needs no attention.
+- **Fastest escape hatch:** download the `.7z` with anything that can resume (browser,
+  Free Download Manager, aria2, even a phone on Wi-Fi) and put the file in your
+  `Downloads` folder or next to `LiteDroid`. Setup looks in those places, matches the
+  size, and installs from it without downloading again.
+
+The exact file for Windows 10 x64, ultra-light profile:
+
+```
+WSA_2407.40000.4.0_x64_Release-Nightly-NoGApps-NoAmazon_Windows_10.7z
+```
+
+from <https://github.com/MustardChef/WSABuilds/releases> (tag
+`Windows_10_2407.40000.4.0_LTS_8`, about 530 MB). For Windows 11 use the
+`Windows_11_…` release and the asset without the `_Windows_10` suffix.
+
+---
+
 ## Setup stopped and said "reboot required"
 
 Expected on a machine that never ran Hyper-V. Reboot, run

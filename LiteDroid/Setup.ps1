@@ -109,39 +109,220 @@ if ($restartNeeded) {
 }
 
 # ------------------------------------------------------------ 3. toolchain
-function Invoke-LdDownload {
-    param([string]$Url, [string]$OutFile, [string]$Label)
+function Get-LdRemoteSize {
+    <#
+        Content-Length of a URL, or -1 when unknown. Used to tell a complete
+        download from one that died halfway.
+    #>
+    param([string]$Url)
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($Url)
+        $req.Method = 'HEAD'
+        $req.UserAgent = 'LiteDroid'
+        $req.AllowAutoRedirect = $true
+        $req.Timeout = 25000
+        $resp = $req.GetResponse()
+        $len = $resp.ContentLength
+        $resp.Close()
+        return [int64]$len
+    } catch { return [int64]-1 }
+}
 
-    if ((Test-Path -LiteralPath $OutFile) -and ((Get-Item -LiteralPath $OutFile).Length -gt 0)) {
-        Write-LdLog "$Label already downloaded." INFO
-        return $true
+function Test-LdDownloadComplete {
+    param([string]$OutFile, [int64]$ExpectedBytes)
+    if (-not (Test-Path -LiteralPath $OutFile)) { return $false }
+    $have = (Get-Item -LiteralPath $OutFile).Length
+    if ($have -le 0) { return $false }
+    if ($ExpectedBytes -gt 0) { return ($have -eq $ExpectedBytes) }
+    return $true
+}
+
+function Invoke-LdStreamDownload {
+    <#
+        Pure .NET fallback downloader: HTTP Range resume, streamed straight to
+        disk in 256 KB chunks, with progress lines. Never buffers the whole file
+        in memory (which is what makes Invoke-WebRequest useless for a 530 MB
+        image on PowerShell 5.1).
+    #>
+    param([string]$Url, [string]$OutFile, [string]$Label, [int64]$ExpectedBytes = -1)
+
+    $have = [int64]0
+    if (Test-Path -LiteralPath $OutFile) { $have = (Get-Item -LiteralPath $OutFile).Length }
+
+    $req = [System.Net.HttpWebRequest]::Create($Url)
+    $req.UserAgent = 'LiteDroid/1.0'
+    $req.AllowAutoRedirect = $true
+    $req.Timeout = 60000
+    $req.ReadWriteTimeout = 60000
+    if ($have -gt 0) {
+        Write-LdLog ("Resuming at {0:N1} MB ..." -f ($have / 1MB)) INFO
+        $req.AddRange($have)
     }
+
+    $resp = $req.GetResponse()
+    $mode = [System.IO.FileMode]::Append
+    if ($have -gt 0 -and [int]$resp.StatusCode -ne 206) {
+        # server ignored the Range header: start over cleanly
+        Write-LdLog 'Server does not support resume - restarting this file.' WARN
+        $have = 0
+        $mode = [System.IO.FileMode]::Create
+    }
+    $total = $have + $resp.ContentLength
+
+    $fs = New-Object System.IO.FileStream($OutFile, $mode, [System.IO.FileAccess]::Write)
+    $in = $resp.GetResponseStream()
+    $buf = New-Object byte[] 262144
+    $done = $have
+    $lastMark = $have
+    $started = Get-Date
+    try {
+        while ($true) {
+            $n = $in.Read($buf, 0, $buf.Length)
+            if ($n -le 0) { break }
+            $fs.Write($buf, 0, $n)
+            $done += $n
+            if (($done - $lastMark) -ge (25 * 1MB) -or ($total -gt 0 -and $done -eq $total)) {
+                $lastMark = $done
+                $pct = 0
+                if ($total -gt 0) { $pct = [int](100 * $done / $total) }
+                $elapsed = ((Get-Date) - $started).TotalSeconds
+                $rate = 0
+                if ($elapsed -gt 0) { $rate = (($done - $have) / 1MB) / $elapsed }
+                Write-LdLog ("{0}: {1} MB / {2} MB ({3}%, {4:N0} KB/s)" -f $Label, [int]($done / 1MB), [int]($total / 1MB), $pct, ($rate * 1024)) INFO
+            }
+        }
+    } finally {
+        $fs.Flush()
+        $fs.Close()
+        $in.Close()
+        $resp.Close()
+    }
+    return $done
+}
+
+function Invoke-LdDownload {
+    <#
+        Downloads $Url to $OutFile, resuming whatever bytes are already on disk.
+
+        The 530 MB Android image is the one thing here that can hit a bad network,
+        so this is deliberately stubborn: curl with resume + retry-all-errors,
+        then a Range-based .NET stream downloader, then verification against the
+        expected size. A truncated file is never treated as "already done".
+    #>
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [string]$Label,
+        [int64]$ExpectedBytes = -1
+    )
+
     $dir = Split-Path -Parent $OutFile
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 
-    Write-LdLog "Downloading $Label ..." STEP
+    if ($ExpectedBytes -le 0) { $ExpectedBytes = Get-LdRemoteSize -Url $Url }
+
+    if (Test-Path -LiteralPath $OutFile) {
+        $have = (Get-Item -LiteralPath $OutFile).Length
+        if ($ExpectedBytes -gt 0 -and $have -eq $ExpectedBytes) {
+            Write-LdLog ("$Label already downloaded ({0:N1} MB)." -f ($have / 1MB)) INFO
+            return $true
+        }
+        if ($ExpectedBytes -le 0 -and $have -gt 0) {
+            Write-LdLog "$Label already downloaded." INFO
+            return $true
+        }
+        Write-LdLog ("Incomplete file on disk ({0:N1} MB) - continuing from there." -f ($have / 1MB)) WARN
+    }
+
+    if ($ExpectedBytes -gt 0) {
+        Write-LdLog ("Downloading {0} ({1:N0} MB) ..." -f $Label, ($ExpectedBytes / 1MB)) STEP
+    } else {
+        Write-LdLog "Downloading $Label ..." STEP
+    }
+
     $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
     if (Test-Path -LiteralPath $curl) {
-        # curl.exe is much faster than Invoke-WebRequest for big files and shows
-        # a real progress bar in the console.
-        & $curl -L --fail --retry 3 --retry-delay 3 --connect-timeout 20 -o $OutFile $Url
-        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $OutFile)) {
+        for ($attempt = 1; $attempt -le 4; $attempt++) {
+            if ($attempt -gt 1) {
+                Write-LdLog ("Retry {0}/4 - resuming the broken transfer ..." -f $attempt) WARN
+                Start-Sleep -Seconds 5
+            }
+
+            # Resume offset is passed explicitly (-C <bytes>) instead of curl's
+            # "-C -" auto mode: same result, no ambiguity in the command line.
+            $have = [int64]0
+            if (Test-Path -LiteralPath $OutFile) { $have = (Get-Item -LiteralPath $OutFile).Length }
+            $curlArgs = @('-L')
+            if ($have -gt 0) { $curlArgs += @('-C', [string]$have) }
+            $curlArgs += @(
+                '--retry', '5', '--retry-delay', '3',
+                '--retry-all-errors',            # also retries curl's "partial file" (18)
+                '--connect-timeout', '25',
+                '--speed-limit', '20480',        # give up after ...
+                '--speed-time', '120',           # ... 2 minutes under 20 KB/s
+                '--fail', '-o', $OutFile, $Url
+            )
+            & $curl @curlArgs
+            $code = $LASTEXITCODE
+            if (Test-LdDownloadComplete -OutFile $OutFile -ExpectedBytes $ExpectedBytes) {
+                Write-LdLog ("{0}: {1:N1} MB" -f $Label, ((Get-Item -LiteralPath $OutFile).Length / 1MB)) OK
+                return $true
+            }
+            Write-LdLog ("curl attempt {0} stopped early (exit {1})." -f $attempt, $code) WARN
+        }
+    }
+
+    # --- fallback: our own resumable downloader
+    Write-LdLog 'Switching to the built-in resumable downloader ...' WARN
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            [void](Invoke-LdStreamDownload -Url $Url -OutFile $OutFile -Label $Label -ExpectedBytes $ExpectedBytes)
+        } catch {
+            Write-LdLog ("Download error: " + $_.Exception.Message) WARN
+        }
+        if (Test-LdDownloadComplete -OutFile $OutFile -ExpectedBytes $ExpectedBytes) {
             Write-LdLog ("{0}: {1:N1} MB" -f $Label, ((Get-Item -LiteralPath $OutFile).Length / 1MB)) OK
             return $true
         }
-        Write-LdLog "curl failed (exit $LASTEXITCODE), retrying with PowerShell ..." WARN
+        Start-Sleep -Seconds 5
     }
-    try {
-        $old = $ProgressPreference
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-        $ProgressPreference = $old
-        Write-LdLog ("{0}: {1:N1} MB" -f $Label, ((Get-Item -LiteralPath $OutFile).Length / 1MB)) OK
-        return $true
-    } catch {
-        Write-LdLog "Download failed: $($_.Exception.Message)" ERR
-        return $false
+
+    $have = 0
+    if (Test-Path -LiteralPath $OutFile) { $have = (Get-Item -LiteralPath $OutFile).Length }
+    Write-LdLog ("Download did not finish: {0:N0} MB of {1:N0} MB on disk." -f ($have / 1MB), ($ExpectedBytes / 1MB)) ERR
+    Write-LdLog 'Run Setup again - it continues from the bytes already downloaded, it does not start over.' WARN
+    return $false
+}
+
+function Find-LdLocalArchive {
+    <#
+        Escape hatch for slow connections: if a complete image is already on the
+        disk (downloaded by a browser, an external download manager, copied from
+        another PC or a phone), use it instead of downloading again.
+    #>
+    param([string]$Name, [int64]$ExpectedBytes, [string[]]$Dirs)
+
+    foreach ($d in $Dirs) {
+        if (-not $d -or -not (Test-Path -LiteralPath $d)) { continue }
+        $candidates = @()
+        try {
+            $candidates = Get-ChildItem -LiteralPath $d -Filter '*.7z' -File -ErrorAction Stop
+        } catch { continue }
+        foreach ($c in $candidates) {
+            $isNamed = ($c.Name -eq $Name)
+            $isWsa = ($c.Name -like 'WSA_*.7z')
+            if (-not ($isNamed -or $isWsa)) { continue }
+            if ($ExpectedBytes -gt 0 -and $c.Length -ne $ExpectedBytes) {
+                if ($isNamed) {
+                    Write-LdLog ("Found {0} but it is {1:N0} MB instead of {2:N0} MB - incomplete, ignoring it." -f $c.FullName, ($c.Length / 1MB), ($ExpectedBytes / 1MB)) WARN
+                }
+                continue
+            }
+            Write-LdLog ("Using the image already on disk: " + $c.FullName) OK
+            return $c.FullName
+        }
     }
+    return $null
 }
 
 Write-LdLog 'Preparing tools ...' STEP
@@ -225,6 +406,7 @@ function Resolve-LdWsaAsset {
                 Url       = [string]$asset.browser_download_url
                 Name      = $n
                 SizeMb    = [math]::Round([double]$asset.size / 1MB, 0)
+                SizeBytes = [int64]$asset.size
                 Release   = $tag
             }
         }
@@ -243,7 +425,7 @@ try {
 $cfg = Get-LdConfig
 if (-not $asset -and $cfg['WsaAssetUrl']) {
     Write-LdLog 'Using the pinned image URL from config.json.' WARN
-    $asset = [pscustomobject]@{ Url = [string]$cfg['WsaAssetUrl']; Name = 'pinned-image.7z'; SizeMb = 0; Release = 'pinned' }
+    $asset = [pscustomobject]@{ Url = [string]$cfg['WsaAssetUrl']; Name = 'pinned-image.7z'; SizeMb = 0; SizeBytes = [int64]-1; Release = 'pinned' }
 }
 if (-not $asset) {
     Write-LdLog 'No matching Android image could be found (GitHub unreachable, or no asset for this profile).' ERR
@@ -280,9 +462,37 @@ if ($Replace -and $existing) {
 $wsaDir = Join-Path $script:LD.Root 'wsa'
 if (-not (Get-LdWsaPackage) -or $Replace) {
     $archive = Join-Path $script:LD.Root ('downloads\' + $asset.Name)
-    if (-not (Invoke-LdDownload -Url $asset.Url -OutFile $archive -Label 'Android 13 image')) { exit 4 }
+    $expected = [int64]-1
+    try { $expected = [int64]$asset.SizeBytes } catch { $expected = [int64]-1 }
 
-    Write-LdLog 'Extracting (this takes a minute on a hard disk) ...' STEP
+    # A complete image anywhere obvious wins over downloading 530 MB again.
+    $localHit = $null
+    if (-not (Test-LdDownloadComplete -OutFile $archive -ExpectedBytes $expected)) {
+        $localHit = Find-LdLocalArchive -Name $asset.Name -ExpectedBytes $expected -Dirs @(
+            (Split-Path -Parent $here), $here,
+            (Join-Path $env:USERPROFILE 'Downloads'),
+            (Join-Path $env:USERPROFILE 'Desktop')
+        )
+    }
+    if ($localHit -and ($localHit -ne $archive)) {
+        Write-LdLog 'Copying it into the LiteDroid folder ...' STEP
+        try { Copy-Item -LiteralPath $localHit -Destination $archive -Force -ErrorAction Stop } catch {
+            Write-LdLog ("Copy failed: " + $_.Exception.Message) ERR
+        }
+    }
+
+    if (-not (Invoke-LdDownload -Url $asset.Url -OutFile $archive -Label 'Android 13 image' -ExpectedBytes $expected)) { exit 4 }
+
+    Write-LdLog 'Verifying the archive ...' STEP
+    & $sevenZip t $archive | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-LdLog 'The downloaded image is damaged. Deleting it so the next run fetches a clean copy.' ERR
+        Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+        exit 4
+    }
+    Write-LdLog 'Archive verified.' OK
+
+    Write-LdLog 'Extracting (this takes a minute or two) ...' STEP
     if (Test-Path -LiteralPath $wsaDir) {
         try { Remove-Item -LiteralPath $wsaDir -Recurse -Force -ErrorAction Stop } catch { }
     }
@@ -290,6 +500,7 @@ if (-not (Get-LdWsaPackage) -or $Replace) {
     & $sevenZip x $archive ("-o" + $wsaDir) -y | Out-Null
     if ($LASTEXITCODE -ne 0) {
         Write-LdLog "Extraction failed (7-Zip exit $LASTEXITCODE)." ERR
+        Write-LdLog 'Free some disk space (about 4 GB is needed while extracting), then run Setup again.' WARN
         exit 4
     }
     Write-LdLog 'Extracted.' OK

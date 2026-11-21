@@ -21,6 +21,12 @@ Sideload any `.apk` by dragging it onto the window.
 From then on you never need LiteDroid open: Android apps live in the Start menu like
 any other Windows program. LiteDroid is just the control panel.
 
+**Slow or flaky connection?** The 530 MB image download **resumes**. If it drops,
+run `START HERE.bat` again — it continues from the bytes already on disk instead of
+starting over. You can also fetch the `.7z` yourself with a browser or a download
+manager and drop it in `C:\Users\<you>\Downloads`; Setup finds it, checks its size
+and skips the download entirely.
+
 ---
 
 ## Why this is the fastest option on Windows
