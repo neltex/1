@@ -205,7 +205,7 @@ function Invoke-LdDownload {
         Downloads $Url to $OutFile, resuming whatever bytes are already on disk.
 
         The 530 MB Android image is the one thing here that can hit a bad network,
-        so this is deliberately stubborn: curl with resume + retry-all-errors,
+        so this is deliberately stubborn: curl with resume + outer retries,
         then a Range-based .NET stream downloader, then verification against the
         expected size. A truncated file is never treated as "already done".
     #>
@@ -256,7 +256,6 @@ function Invoke-LdDownload {
             if ($have -gt 0) { $curlArgs += @('-C', [string]$have) }
             $curlArgs += @(
                 '--retry', '5', '--retry-delay', '3',
-                '--retry-all-errors',            # also retries curl's "partial file" (18)
                 '--connect-timeout', '25',
                 '--speed-limit', '20480',        # give up after ...
                 '--speed-time', '120',           # ... 2 minutes under 20 KB/s
@@ -389,7 +388,7 @@ function Invoke-LdSegmentedDownload {
             $cargs = @(
                 '-sS', '-L', '--fail',
                 '-r', ('{0}-{1}' -f $c.Start, $c.End),
-                '--retry', '6', '--retry-delay', '2', '--retry-all-errors',
+                '--retry', '6', '--retry-delay', '2',
                 '--connect-timeout', '25',
                 '--speed-limit', '15360', '--speed-time', '90',
                 '-o', ('"' + $c.File + '"'),
@@ -740,6 +739,25 @@ if (-not (Get-LdWsaPackage) -or $Replace) {
         }
     }
 
+    # The WSABuilds image is unsigned. Windows 10 blocks registering unsigned
+    # packages with 0x80073CFF unless Developer Mode is enabled. This is a
+    # per-machine Windows setting, not the Android developer options toggle.
+    Write-LdLog 'Enabling Windows Developer Mode for the unsigned Android runtime ...' STEP
+    try {
+        $unlock = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock'
+        if (-not (Test-Path -LiteralPath $unlock)) {
+            New-Item -Path $unlock -Force -ErrorAction Stop | Out-Null
+        }
+        New-ItemProperty -Path $unlock -Name 'AllowDevelopmentWithoutDevLicense' -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+        $enabled = (Get-ItemProperty -Path $unlock -Name 'AllowDevelopmentWithoutDevLicense' -ErrorAction Stop).AllowDevelopmentWithoutDevLicense
+        if ($enabled -ne 1) { throw 'Windows did not save the Developer Mode setting.' }
+        Write-LdLog 'Developer Mode enabled.' OK
+    } catch {
+        Write-LdLog ("Could not enable Developer Mode: " + $_.Exception.Message) ERR
+        Write-LdLog 'In Windows Settings > Update & Security > For developers, turn on Developer Mode, then run START HERE.bat again.' WARN
+        exit 4
+    }
+
     # ---- register the unpackaged runtime
     Write-LdLog 'Registering the runtime with Windows ...' STEP
     $manifest = $null
@@ -758,7 +776,7 @@ if (-not (Get-LdWsaPackage) -or $Replace) {
     } catch {
         Write-LdLog "Registration failed: $($_.Exception.Message)" ERR
         Write-LdLog 'Diagnostics:  Get-AppPackageLog -ActivityID <id printed above>' WARN
-        Write-LdLog 'Common causes: a pending reboot, a third-party emulator holding virtualization, or an antivirus lock.' WARN
+        Write-LdLog 'If error 0x80073CFF persists, check Windows Settings > Update & Security > For developers > Developer Mode (workplace policy may override it).' WARN
         exit 4
     }
 }
