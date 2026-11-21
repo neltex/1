@@ -712,6 +712,34 @@ if (-not (Get-LdWsaPackage) -or $Replace) {
         }
     }
 
+    # ---- WinUI 2.8 framework is required by WSA on clean Windows 10 installs.
+    # The VCLibs 0x80073D06 warning means a newer version is already installed;
+    # it is harmless. Microsoft.UI.Xaml.2.8 is a separate mandatory dependency.
+    $xamlRequired = [version]'8.2208.12001.0'
+    $xamlInstalled = Get-AppxPackage -Name 'Microsoft.UI.Xaml.2.8' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Version -ge $xamlRequired } | Select-Object -First 1
+    if ($xamlInstalled) {
+        Write-LdLog ("Microsoft.UI.Xaml.2.8 already installed ({0})." -f $xamlInstalled.Version) INFO
+    } else {
+        $xamlArch = 'x64'
+        if ($pf.Arch -eq 'ARM64') { $xamlArch = 'arm64' }
+        $xamlUrl = "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.$xamlArch.appx"
+        $xamlFile = Join-Path $script:LD.Root ("downloads\Microsoft.UI.Xaml.2.8.$xamlArch.appx")
+        Write-LdLog 'Installing missing Microsoft.UI.Xaml.2.8 framework (~5 MB) ...' STEP
+        if (-not (Invoke-LdDownload -Url $xamlUrl -OutFile $xamlFile -Label 'Microsoft.UI.Xaml.2.8 dependency')) {
+            Write-LdLog 'Could not download Microsoft.UI.Xaml.2.8. Check the connection and run START HERE.bat again; the 530 MB image is already saved.' ERR
+            exit 4
+        }
+        try {
+            Add-AppxPackage -Path $xamlFile -ErrorAction Stop
+            Write-LdLog 'Microsoft.UI.Xaml.2.8 ready.' OK
+        } catch {
+            Write-LdLog "Microsoft.UI.Xaml.2.8 installation failed: $($_.Exception.Message)" ERR
+            Write-LdLog 'The Android image is safe. Run START HERE.bat again after Windows Update finishes.' WARN
+            exit 4
+        }
+    }
+
     # ---- register the unpackaged runtime
     Write-LdLog 'Registering the runtime with Windows ...' STEP
     $manifest = $null
