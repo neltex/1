@@ -13,8 +13,8 @@ rem ---- is the Android runtime already installed? -------------------------
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForAndroid -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
 if errorlevel 1 goto install
 
-rem ---- installed but damaged: repair instead of opening a broken window ----
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForAndroid -ErrorAction SilentlyContinue; if (-not $p -or -not (Test-Path -LiteralPath (Join-Path $p.InstallLocation 'WsaClient\gfxstream_backend.dll')) -or -not (Test-Path -LiteralPath (Join-Path $p.InstallLocation 'WsaClient\WSACodecs.dll'))) { exit 1 }"
+rem ---- check every shared DLL, not just the first one Windows reports ----
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForAndroid -ErrorAction SilentlyContinue; if (-not $p) { exit 1 }; $d=Join-Path $p.InstallLocation 'WsaClient'; if (-not (Test-Path (Join-Path $d 'WsaClient.exe'))) { exit 1 }; foreach ($n in @('gfxstream_backend.dll','WSACodecs.dll')) { if (-not (Test-Path (Join-Path $d $n))) { exit 1 } }; foreach ($f in @(Get-ChildItem $p.InstallLocation -Filter '*.dll' -File)) { if (-not (Test-Path (Join-Path $d $f.Name))) { exit 1 } }"
 if errorlevel 1 goto install
 
 rem ---- already installed: just open the window ---------------------------
@@ -24,7 +24,7 @@ exit /b 0
 :install
 echo.
 echo   ==========================================================
-echo    LiteDroid is not installed on this PC yet.
+echo    LiteDroid needs installation or repair.
 echo.
 echo    This one-time step downloads about 550 MB and needs
 echo    administrator rights. It takes 5-15 minutes.

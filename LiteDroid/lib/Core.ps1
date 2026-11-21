@@ -565,6 +565,25 @@ function Set-LdWsaSettings {
     Write-LdLog ("settings.json updated: " + (($Values.Keys | Sort-Object) -join ', ')) OK
 }
 
+function Get-LdMissingWsaFiles {
+    # Only the image's own top-level native DLLs are mirrored beside the EXE.
+    # Do not guess system DLL names or download standalone DLLs.
+    $pkg = Get-LdWsaPackage
+    $client = Get-LdWsaClientPath
+    if (-not $pkg -or -not $client) { return @('WsaClient.exe') }
+    $dir = Split-Path -Parent $client
+    $missing = New-Object System.Collections.ArrayList
+    foreach ($name in @('gfxstream_backend.dll', 'WSACodecs.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dir $name))) { [void]$missing.Add($name) }
+    }
+    foreach ($dll in @(Get-ChildItem -LiteralPath $pkg.InstallLocation -Filter '*.dll' -File -ErrorAction SilentlyContinue)) {
+        if (-not (Test-Path -LiteralPath (Join-Path $dir $dll.Name)) -and -not $missing.Contains($dll.Name)) {
+            [void]$missing.Add($dll.Name)
+        }
+    }
+    return $missing.ToArray()
+}
+
 function Start-LdWsa {
     <#
         Boots the Android subsystem by asking it to open Android Settings, which
@@ -575,11 +594,10 @@ function Start-LdWsa {
         Write-LdLog 'Android runtime is not installed yet.' ERR
         return $false
     }
-    foreach ($name in @('gfxstream_backend.dll', 'WSACodecs.dll')) {
-        if (-not (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $client) $name))) {
-            Write-LdLog ("Android cannot start: {0} is missing beside WsaClient.exe. Run START HERE.bat from the updated ZIP to repair it." -f $name) ERR
-            return $false
-        }
+    $missing = @(Get-LdMissingWsaFiles)
+    if ($missing.Count -gt 0) {
+        Write-LdLog ('Android cannot start; missing runtime files: ' + ($missing -join ', ') + '. Run START HERE.bat from the updated ZIP to repair them.') ERR
+        return $false
     }
     Write-LdLog 'Starting Android runtime ...' STEP
     try {

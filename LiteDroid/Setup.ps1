@@ -899,6 +899,14 @@ if (-not (Test-LdAdbDevice)) {
     }
 }
 
+# Do not claim "Setup complete" and open the manager when the VM never booted.
+# APK installation requires a working adb connection, not just an AppX entry.
+if (-not (Test-LdAdbDevice)) {
+    Write-LdLog 'Setup could not start Android, so APK installation has not happened. The saved image and settings are safe.' ERR
+    Write-LdLog 'Do not retry APK install yet; fix the startup error shown above first.' WARN
+    exit 4
+}
+
 # ------------------------------------------------------------ 8. ready APKs
 if (-not $SkipApk) {
     $searchDirs = @((Split-Path -Parent $here), $here)
