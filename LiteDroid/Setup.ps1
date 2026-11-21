@@ -879,16 +879,23 @@ Save-LdConfig -Config $cfg
 
 # ------------------------------------------------------------- 7. first boot
 Write-LdLog 'Starting the runtime for the first time (30-90 s) ...' STEP
-[void](Start-LdVmAndAdb -TimeoutSec 150)
+[void](Start-LdVmAndAdb -TimeoutSec 55)
 
 if (-not (Test-LdAdbDevice)) {
+    $vmRunning = ($null -ne (Get-LdVmProcess))
+    $service = Get-Service -Name 'WsaService' -ErrorAction SilentlyContinue
+    Write-LdLog ("Startup state: VM running={0}, WsaService={1}, WsaClient running={2}, adb.exe present={3}" -f $vmRunning, $(if ($service) { $service.Status } else { 'not found' }), [bool](Get-Process -Name 'WsaClient' -ErrorAction SilentlyContinue), [bool](Get-LdAdbExe)) WARN
+    if (-not $vmRunning) {
+        Write-LdLog 'The Android VM did not start; this is not an APK or adb developer-mode problem. A second adb wait cannot fix it.' ERR
+        exit 4
+    }
     # A first boot can regenerate settings.json, which silently drops the adb
     # switch. Re-apply the budget, restart once, then report honestly.
     Write-LdLog 'No adb yet - re-applying settings and restarting the runtime once ...' WARN
     Set-LdResourceLimits -MemoryMb $mem -Cores $cores -EnableGpu ([bool]$cfg['EnableGpu']) | Out-Null
     Stop-LdWsa -Force
     Start-Sleep -Seconds 2
-    [void](Start-LdVmAndAdb -TimeoutSec 120)
+    [void](Start-LdVmAndAdb -TimeoutSec 45)
 }
 
 $applied = Get-LdWsaSettings
@@ -915,6 +922,8 @@ if (-not (Test-LdAdbDevice)) {
 # Do not claim "Setup complete" and open the manager when the VM never booted.
 # APK installation requires a working adb connection, not just an AppX entry.
 if (-not (Test-LdAdbDevice)) {
+    $service = Get-Service -Name 'WsaService' -ErrorAction SilentlyContinue
+    Write-LdLog ("Final startup state: VM running={0}, WsaService={1}, WsaClient running={2}, adb.exe present={3}" -f [bool](Get-LdVmProcess), $(if ($service) { $service.Status } else { 'not found' }), [bool](Get-Process -Name 'WsaClient' -ErrorAction SilentlyContinue), [bool](Get-LdAdbExe)) ERR
     Write-LdLog 'Setup could not start Android, so APK installation has not happened. The saved image and settings are safe.' ERR
     Write-LdLog 'Do not retry APK install yet; fix the startup error shown above first.' WARN
     exit 4

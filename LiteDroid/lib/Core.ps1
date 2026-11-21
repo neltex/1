@@ -498,7 +498,7 @@ function Connect-LdAdb {
             return $true
         }
     }
-    Write-LdLog 'adb never connected. Is developer mode enabled in the WSA settings?' WARN
+    Write-LdLog 'adb did not connect. This can mean the Android VM never started; it does not imply Developer Mode is off.' WARN
     return $false
 }
 
