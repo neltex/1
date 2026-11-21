@@ -398,6 +398,20 @@ Write-Host ('  vCPUs        : ' + $cores) -ForegroundColor Gray
 Write-Host ('  VM footprint : ' + (Format-LdSize $report.VmMb)) -ForegroundColor Gray
 Write-Host ('  Windows free : ' + (Format-LdSize $report.HostFreeMb)) -ForegroundColor Gray
 Write-Host ''
-Write-Host '  Next: run "Start LiteDroid.bat" (no admin needed).' -ForegroundColor Cyan
+Write-Host '  Opening LiteDroid ...' -ForegroundColor Cyan
+Write-Host '  (you can close this black window)' -ForegroundColor DarkGray
 Write-Host ''
+
+# Hand over to the manager so a first-time user does not have to find another
+# file. The window runs in this elevated context, which only affects which
+# account the file dialogs and shortcuts use - it is the same program.
+try {
+    $gui = Join-Path $here 'LiteDroid.ps1'
+    Start-Process -FilePath 'powershell.exe' `
+                  -ArgumentList @('-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden',
+                                  '-File', ('"' + $gui + '"')) | Out-Null
+} catch {
+    Write-LdLog "Could not open the window automatically: $($_.Exception.Message)" WARN
+    Write-Host '  Double-click "START HERE.bat" to open LiteDroid.' -ForegroundColor Yellow
+}
 exit 0

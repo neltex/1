@@ -1,0 +1,33 @@
+LiteDroid - 4 steps
+===================
+
+1. Put this whole folder somewhere permanent, for example:
+      C:\Users\<your name>\Downloads\LiteDroid
+
+   (Do not run it from inside a .zip file - extract it first.)
+
+2. Double-click:   START HERE.bat
+
+   - First time: a black window opens, downloads ~550 MB and installs.
+     If it asks to restart Windows, restart, then double-click again.
+   - A blue "Windows protected your PC" box is normal for scripts:
+     click "More info" then "Run anyway".
+
+3. The LiteDroid window opens. Your APK is installed automatically.
+   Click an app -> "Open". It runs in its own normal Windows window.
+
+4. Next time: double-click START HERE.bat again. That is all.
+
+Adding another app later
+------------------------
+Drag the .apk file onto the LiteDroid window (or onto "Install APK.bat").
+
+If something goes wrong
+-----------------------
+Run:   LiteDroid.ps1 -Diag        (right-click > Run with PowerShell)
+Look:  C:\LiteDroid\logs\          (the exact error is in there)
+Read:  docs\TROUBLESHOOTING.md
+
+Nothing here installs a background program, a service, or an update agent.
+Close the LiteDroid window and your Android apps keep running. Close the apps
+and the Android engine shuts down, using 0 MB.
