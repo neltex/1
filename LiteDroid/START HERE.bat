@@ -13,6 +13,10 @@ rem ---- is the Android runtime already installed? -------------------------
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "if (Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForAndroid -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
 if errorlevel 1 goto install
 
+rem ---- installed but damaged: repair instead of opening a broken window ----
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=Get-AppxPackage -Name MicrosoftCorporationII.WindowsSubsystemForAndroid -ErrorAction SilentlyContinue; if (-not $p -or -not (Test-Path -LiteralPath (Join-Path $p.InstallLocation 'WsaClient\gfxstream_backend.dll'))) { exit 1 }"
+if errorlevel 1 goto install
+
 rem ---- already installed: just open the window ---------------------------
 start "" powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0LiteDroid.ps1"
 exit /b 0
@@ -36,5 +40,7 @@ exit /b 0
 
 :runsetup
 title LiteDroid setup
-powershell.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File "%~dp0Setup.ps1"
-exit /b 0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Setup.ps1"
+set "result=%errorlevel%"
+if not "%result%"=="0" pause
+exit /b %result%

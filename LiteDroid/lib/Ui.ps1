@@ -701,6 +701,9 @@ function Show-LdMainWindow {
     $form.Add_FormClosing({
         $script:LDUi.Timer.Stop()
         $script:LDUi.Timer.Dispose()
+        # Closing LiteDroid means stop its Android processes too; otherwise
+        # WsaClient can hold the extracted runtime directory open indefinitely.
+        try { Stop-LdWsa -Force } catch { }
     })
 
     # ------------------------------------------------------------ bootstrap

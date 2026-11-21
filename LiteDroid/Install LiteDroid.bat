@@ -13,5 +13,7 @@ exit /b 0
 
 :run
 title LiteDroid setup
-powershell.exe -NoProfile -ExecutionPolicy Bypass -NoExit -File "%~dp0Setup.ps1" %*
-exit /b %errorlevel%
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Setup.ps1" %*
+set "result=%errorlevel%"
+if not "%result%"=="0" pause
+exit /b %result%
