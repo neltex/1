@@ -595,27 +595,40 @@ function Resolve-LdWsaAsset {
 }
 
 $isWin10 = -not $pf.IsWin11
-$asset = $null
-try {
-    $asset = Resolve-LdWsaAsset -ProfileName $Profile -WinTen $isWin10 -Arch $pf.Arch
-} catch {
-    Write-LdLog "Release lookup failed: $($_.Exception.Message)" WARN
-}
-
 $cfg = Get-LdConfig
-if (-not $asset -and $cfg['WsaAssetUrl']) {
-    Write-LdLog 'Using the pinned image URL from config.json.' WARN
-    $asset = [pscustomobject]@{ Url = [string]$cfg['WsaAssetUrl']; Name = 'pinned-image.7z'; SizeMb = 0; SizeBytes = [int64]-1; Release = 'pinned' }
-}
-if (-not $asset) {
-    Write-LdLog 'No matching Android image could be found (GitHub unreachable, or no asset for this profile).' ERR
-    Write-LdLog 'Tip: set "WsaAssetUrl" in C:\LiteDroid\config.json to a direct .7z link and run Setup again.' WARN
-    exit 4
-}
-
-Write-LdLog ("Image: {0} ({1} MB, {2})" -f $asset.Name, $asset.SizeMb, $asset.Release) INFO
-
 $existing = Get-LdWsaPackage
+$asset = $null
+
+# Repair an already registered runtime without contacting GitHub. A broken
+# DNS connection must never prevent staging DLLs from the image on disk.
+if ($existing -and -not $Replace) {
+    $saved = Join-Path $script:LD.Root 'downloads'
+    $versionFragment = [string]$existing.Version
+    $localArchive = @(Get-ChildItem -LiteralPath $saved -Filter '*.7z' -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like ('*' + $versionFragment + '*') -and $_.Name -like '*NoAmazon*' } |
+        Sort-Object Length -Descending | Select-Object -First 1)
+    $localName = ''
+    if ($localArchive.Count -gt 0) { $localName = $localArchive[0].Name }
+    $asset = [pscustomobject]@{ Url = ''; Name = $localName; SizeMb = 0; SizeBytes = [int64]-1; Release = 'installed' }
+    Write-LdLog 'Runtime already registered - offline repair (no GitHub lookup or download).' INFO
+} else {
+    try {
+        $asset = Resolve-LdWsaAsset -ProfileName $Profile -WinTen $isWin10 -Arch $pf.Arch
+    } catch {
+        Write-LdLog "Release lookup failed: $($_.Exception.Message)" WARN
+    }
+    if (-not $asset -and $cfg['WsaAssetUrl']) {
+        Write-LdLog 'Using the pinned image URL from config.json.' WARN
+        $asset = [pscustomobject]@{ Url = [string]$cfg['WsaAssetUrl']; Name = 'pinned-image.7z'; SizeMb = 0; SizeBytes = [int64]-1; Release = 'pinned' }
+    }
+    if (-not $asset) {
+        Write-LdLog 'No matching Android image could be found (GitHub unreachable, or no asset for this profile).' ERR
+        Write-LdLog 'Tip: set "WsaAssetUrl" in C:\LiteDroid\config.json to a direct .7z link and run Setup again.' WARN
+        exit 4
+    }
+    Write-LdLog ("Image: {0} ({1} MB, {2})" -f $asset.Name, $asset.SizeMb, $asset.Release) INFO
+}
+
 if ($existing -and -not $Replace) {
     $installedProfile = [string]$cfg['InstalledProfile']
     if (-not $installedProfile -and $Profile -eq 'ultralight') {
