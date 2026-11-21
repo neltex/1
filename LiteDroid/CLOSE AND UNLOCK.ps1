@@ -13,7 +13,7 @@ try {
 try {
     $owners = @(Get-CimInstance Win32_Process -Filter "Name = 'powershell.exe' OR Name = 'pwsh.exe'" -ErrorAction Stop |
         Where-Object {
-            $_.ProcessId -ne $me -and $_.CommandLine -match '(?i)(?:LiteDroid\.ps1|Setup\.ps1|Install LiteDroid\.bat)'
+            $_.ProcessId -ne $me -and $_.CommandLine -match '(?i)(?:LiteDroid\.ps1|LiteDroid[\\/]Setup\.ps1)'
         })
     foreach ($proc in $owners) {
         try {
