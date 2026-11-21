@@ -294,6 +294,187 @@ function Invoke-LdDownload {
     return $false
 }
 
+function Get-LdRangeSupport {
+    <#
+        True when the server honours Range requests (HTTP 206). Parallel
+        downloading is only possible on such servers.
+    #>
+    param([string]$Url)
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($Url)
+        $req.UserAgent = 'LiteDroid/1.0'
+        $req.AllowAutoRedirect = $true
+        $req.Timeout = 25000
+        [void]$req.AddRange(0, 1023)
+        $resp = $req.GetResponse()
+        $code = [int]$resp.StatusCode
+        $resp.Close()
+        return ($code -eq 206)
+    } catch { return $false }
+}
+
+function Invoke-LdSegmentedDownload {
+    <#
+        Downloads the Big File over N parallel connections.
+
+        Why: most links to GitHub throttle a *single* TCP stream (that is why one
+        curl sat at 240 KB/s), while the total bandwidth of the line is much
+        higher. Splitting the remainder into 8 ranges and pulling them at once
+        typically moves 2-8x faster, and every part is independently retried.
+
+        Chunking is deterministic (same size, same offset -> same boundaries), so
+        if this run cannot finish, the complete .partN files on disk are reused by
+        the next run instead of being downloaded again.
+
+        Returns $true only when the file is on disk with exactly the expected size.
+    #>
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [string]$Label,
+        [int64]$TotalBytes = -1,
+        [int]$Connections = 8
+    )
+
+    $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+    if (-not (Test-Path -LiteralPath $curl)) { return $false }
+    if ($TotalBytes -le 0) { $TotalBytes = Get-LdRemoteSize -Url $Url }
+    if ($TotalBytes -le 0) { return $false }
+    if ($Connections -lt 2) { return $false }
+    if ($Connections -gt 16) { $Connections = 16 }
+
+    if (-not (Get-LdRangeSupport -Url $Url)) {
+        Write-LdLog 'Server does not support byte ranges - using one connection.' WARN
+        return $false
+    }
+
+    $have = [int64]0
+    if (Test-Path -LiteralPath $OutFile) { $have = (Get-Item -LiteralPath $OutFile).Length }
+    if ($have -ge $TotalBytes) { return $true }
+
+    $remaining = $TotalBytes - $have
+    $chunkBytes = [int64][math]::Ceiling($remaining / [double]$Connections)
+    if ($chunkBytes -lt [int64](4 * 1MB)) { $chunkBytes = [int64](4 * 1MB) }
+
+    $chunks = New-Object System.Collections.ArrayList
+    $pos = $have
+    $i = 0
+    while ($pos -lt $TotalBytes) {
+        $end = $pos + $chunkBytes - 1
+        if ($end -ge $TotalBytes) { $end = $TotalBytes - 1 }
+        [void]$chunks.Add([pscustomobject]@{
+            Index = $i
+            Start = $pos
+            End   = $end
+            File  = ($OutFile + '.part' + $i)
+        })
+        $pos = $end + 1
+        $i = $i + 1
+    }
+
+    Write-LdLog ("{0}: {1:N0} MB left, {2} parallel connections of ~{3:N0} MB" -f $Label, ($remaining / 1MB), $chunks.Count, ($chunkBytes / 1MB)) STEP
+
+    for ($round = 1; $round -le 3; $round++) {
+        $procs = @{}
+        $queued = 0
+        foreach ($c in $chunks) {
+            $want = $c.End - $c.Start + 1
+            $got = [int64]0
+            if (Test-Path -LiteralPath $c.File) { $got = (Get-Item -LiteralPath $c.File).Length }
+            if ($got -eq $want) { continue }
+            if ($got -gt 0) { Remove-Item -LiteralPath $c.File -Force -ErrorAction SilentlyContinue }
+
+            # curl always truncates -o, so a partial part is thrown away and its
+            # whole range is fetched again. Parts are ~20 MB, so that is cheap.
+            $cargs = @(
+                '-sS', '-L', '--fail',
+                '-r', ('{0}-{1}' -f $c.Start, $c.End),
+                '--retry', '6', '--retry-delay', '2', '--retry-all-errors',
+                '--connect-timeout', '25',
+                '--speed-limit', '15360', '--speed-time', '90',
+                '-o', ('"' + $c.File + '"'),
+                ('"' + $Url + '"')
+            )
+            try {
+                $procs[$c.Index] = Start-Process -FilePath $curl -ArgumentList $cargs -PassThru -WindowStyle Hidden -ErrorAction Stop
+                $queued = $queued + 1
+            } catch {
+                Write-LdLog ('Could not open a connection: ' + $_.Exception.Message) WARN
+            }
+        }
+
+        if ($queued -eq 0) { break }
+
+        $lastMark = Get-Date
+        $lastDone = [int64]$have
+        while ($true) {
+            $alive = 0
+            foreach ($k in @($procs.Keys)) {
+                $pr = $procs[$k]
+                if ($pr.HasExited) { $procs.Remove($k) } else { $alive = $alive + 1 }
+            }
+            if ($alive -eq 0) { break }
+            Start-Sleep -Milliseconds 800
+
+            if (((Get-Date) - $lastMark).TotalSeconds -ge 5) {
+                $done = [int64]$have
+                foreach ($c in $chunks) {
+                    if (Test-Path -LiteralPath $c.File) { $done = $done + (Get-Item -LiteralPath $c.File).Length }
+                }
+                $secs = ((Get-Date) - $lastMark).TotalSeconds
+                $rate = 0
+                if ($secs -gt 0) { $rate = (($done - $lastDone) / 1MB) / $secs }
+                $pct = [int](100 * $done / $TotalBytes)
+                Write-LdLog ("{0}: {1:N0} / {2:N0} MB ({3}%) - {4:N0} KB/s across {5} connections" -f $Label, ($done / 1MB), ($TotalBytes / 1MB), $pct, ($rate * 1024), $chunks.Count) INFO
+                $lastMark = Get-Date
+                $lastDone = $done
+            }
+        }
+
+        $left = 0
+        foreach ($c in $chunks) {
+            $want = $c.End - $c.Start + 1
+            $got = [int64]0
+            if (Test-Path -LiteralPath $c.File) { $got = (Get-Item -LiteralPath $c.File).Length }
+            if ($got -ne $want) { $left = $left + 1 }
+        }
+        if ($left -eq 0) { break }
+        Write-LdLog ("{0} part(s) incomplete after round {1}/3 - retrying them" -f $left, $round) WARN
+        Start-Sleep -Seconds 3
+    }
+
+    foreach ($c in $chunks) {
+        $want = $c.End - $c.Start + 1
+        $got = [int64]0
+        if (Test-Path -LiteralPath $c.File) { $got = (Get-Item -LiteralPath $c.File).Length }
+        if ($got -ne $want) {
+            Write-LdLog 'Not all parts are here yet - the next run continues with the finished ones.' WARN
+            return $false
+        }
+    }
+
+    Write-LdLog 'Joining the parts ...' STEP
+    $fs = New-Object System.IO.FileStream($OutFile, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write)
+    try {
+        foreach ($c in ($chunks | Sort-Object Index)) {
+            $in = [System.IO.File]::OpenRead($c.File)
+            try { $in.CopyTo($fs, 1048576) } finally { $in.Close() }
+        }
+    } finally {
+        $fs.Close()
+    }
+    foreach ($c in $chunks) { Remove-Item -LiteralPath $c.File -Force -ErrorAction SilentlyContinue }
+
+    $final = (Get-Item -LiteralPath $OutFile).Length
+    if ($final -eq $TotalBytes) {
+        Write-LdLog ("{0}: {1:N1} MB complete." -f $Label, ($final / 1MB)) OK
+        return $true
+    }
+    Write-LdLog ("Joined file is {0} bytes instead of {1} - discarding it." -f $final, $TotalBytes) ERR
+    Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
+    return $false
+}
+
 function Find-LdLocalArchive {
     <#
         Escape hatch for slow connections: if a complete image is already on the
@@ -481,7 +662,20 @@ if (-not (Get-LdWsaPackage) -or $Replace) {
         }
     }
 
-    if (-not (Invoke-LdDownload -Url $asset.Url -OutFile $archive -Label 'Android 13 image' -ExpectedBytes $expected)) { exit 4 }
+    # Parallel first (much faster on connections that throttle one stream),
+    # then the single-stream resumable downloader as a fallback.
+    $dlOk = $false
+    if ($expected -gt [int64](8 * 1MB)) {
+        $conns = 8
+        try {
+            if ([int]$cfg['DownloadConnections'] -gt 0) { $conns = [int]$cfg['DownloadConnections'] }
+        } catch { }
+        $dlOk = Invoke-LdSegmentedDownload -Url $asset.Url -OutFile $archive -Label 'Android 13 image' -TotalBytes $expected -Connections $conns
+    }
+    if (-not $dlOk) {
+        $dlOk = Invoke-LdDownload -Url $asset.Url -OutFile $archive -Label 'Android 13 image' -ExpectedBytes $expected
+    }
+    if (-not $dlOk) { exit 4 }
 
     Write-LdLog 'Verifying the archive ...' STEP
     & $sevenZip t $archive | Out-Null

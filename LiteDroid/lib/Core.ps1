@@ -57,6 +57,7 @@ $script:LDDefaults = @{
     AutoTuneOnLaunch    = $true
     AdbPort             = 5038
     WsaAssetUrl         = ''       # pinned fallback download, optional
+    DownloadConnections = 8        # parallel connections for the 530 MB image
 }
 
 #region logging

@@ -1,19 +1,16 @@
 {
   "_comment": "Reference copy of the settings LiteDroid writes to C:\\LiteDroid\\config.json on first run. Edit the copy in C:\\LiteDroid, not this file.",
-
   "Profile": "ultralight",
   "InstalledProfile": "",
-
   "MemoryMB": 0,
   "Cores": 0,
   "EnableGpu": true,
-
   "DisableAnimations": true,
   "ScreenMode": "native",
   "DisableBloat": true,
   "CachedAppsFreezer": true,
   "GrantPermissions": true,
-
   "AdbPort": 5038,
-  "WsaAssetUrl": ""
+  "WsaAssetUrl": "",
+  "DownloadConnections": 8
 }

@@ -21,11 +21,15 @@ Sideload any `.apk` by dragging it onto the window.
 From then on you never need LiteDroid open: Android apps live in the Start menu like
 any other Windows program. LiteDroid is just the control panel.
 
-**Slow or flaky connection?** The 530 MB image download **resumes**. If it drops,
-run `START HERE.bat` again — it continues from the bytes already on disk instead of
+**Slow or flaky connection?** The 530 MB image is pulled over **8 parallel
+connections** (a single stream to GitHub is usually throttled to a few hundred KB/s;
+eight streams use the whole line). It also **resumes**: if it drops, run
+`START HERE.bat` again and it continues from the bytes already on disk instead of
 starting over. You can also fetch the `.7z` yourself with a browser or a download
 manager and drop it in `C:\Users\<you>\Downloads`; Setup finds it, checks its size
-and skips the download entirely.
+and skips the download entirely. Connection count is `DownloadConnections` in
+`C:\LiteDroid\config.json` (raise to 12–16 on a fast line, lower to 2–4 if the
+network dislikes it).
 
 ---
 

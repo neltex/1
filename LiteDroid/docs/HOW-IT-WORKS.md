@@ -38,7 +38,14 @@ LiteDroid and an app opened from the Start menu are the same object.
 3. **Toolchain** — two small downloads: `7zr.exe` (600 KB standalone extractor,
    used only to unpack the image) and Google's `platform-tools` zip (for `adb`).
    Nothing is installed system-wide.
-4. **Image selection** — the GitHub API is queried for the newest WSABuilds
+4. **Download** — the 530 MB image is fetched as 8 independent HTTP Range
+   requests in parallel (`curl -r start-end` per part), because a single stream to
+   a CDN is typically throttled well below the line's capacity. Part boundaries are
+   deterministic, so finished `.partN` files are reused by the next run; a part is
+   only ever restarted whole (20 MB), never appended to. The joined file is checked
+   against the exact byte size from the release metadata, then tested with 7-Zip.
+   `DownloadConnections` in `config.json` sets the parallelism.
+5. **Image selection** — the GitHub API is queried for the newest WSABuilds
    release matching *(OS, architecture, profile)*, filtering out Magisk builds and
    anything with the Amazon Appstore:
 
@@ -49,11 +56,11 @@ LiteDroid and an app opened from the Start menu are the same object.
 
    If the API is unreachable, set `WsaAssetUrl` in `C:\LiteDroid\config.json` to a
    direct `.7z` link; setup will use it.
-5. **Register** — the archive is extracted to `C:\LiteDroid\wsa` (this folder must
+6. **Register** — the archive is extracted to `C:\LiteDroid\wsa` (this folder must
    stay, it *is* the installation) and registered with
    `Add-AppxPackage -Register …\AppxManifest.xml`. The desktop VCLibs runtime is
    installed first, because the manifest depends on it.
-6. **Budget** — `C:\Users\<you>\AppData\Local\Packages\
+7. **Budget** — `C:\Users\<you>\AppData\Local\Packages\
    MicrosoftCorporationII.WindowsSubsystemForAndroid_8wekyb3d8bbwe\LocalState\
    settings.json` is merged (never overwritten) with:
 
@@ -69,7 +76,7 @@ LiteDroid and an app opened from the Start menu are the same object.
    `memoryMB` / `numberOfCores` / `enableGPU` are the VM budget, read at boot.
    `debugging.localConnect` is what allows `adb` in; without it LiteDroid could not
    install or inspect anything.
-7. **First boot** — the runtime is woken by launching Android Settings, then
+8. **First boot** — the runtime is woken by launching Android Settings, then
    `adb connect 127.0.0.1:58526` is polled for up to 150 s. If a first boot
    regenerated `settings.json` and lost the values, setup re-applies them and
    restarts once.
